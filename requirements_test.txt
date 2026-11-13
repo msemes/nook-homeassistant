@@ -1,0 +1,4 @@
+# Test dependencies of the nook Home Assistant integration.
+# pytest-homeassistant-custom-component pins the matching homeassistant
+# release (0.13.375 = Home Assistant 2026.10.4). Needs Python 3.14.
+pytest-homeassistant-custom-component==0.13.375

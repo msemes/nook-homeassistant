@@ -1,0 +1,32 @@
+play_title:
+  target:
+    entity:
+      integration: nook
+      domain: media_player
+  fields:
+    title:
+      required: true
+      example: The Bear
+      selector:
+        text:
+    type:
+      selector:
+        select:
+          options:
+            - movie
+            - series
+          translation_key: type
+    year:
+      example: 2021
+      selector:
+        number:
+          min: 1870
+          max: 2200
+          mode: box
+    source:
+      selector:
+        select:
+          options:
+            - local
+            - online
+          translation_key: source

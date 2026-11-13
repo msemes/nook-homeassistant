@@ -1,0 +1,7 @@
+{
+  "services": {
+    "play_title": {
+      "service": "mdi:movie-search"
+    }
+  }
+}

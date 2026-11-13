@@ -1,0 +1,128 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This nook server is already set up.",
+      "reauth_successful": "The new API key works. The integration reloads with it."
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the nook server. Check the URL and that the server is up.",
+      "invalid_auth": "The server refused the API key, or the key's scope does not allow this.",
+      "invalid_url": "Enter a URL that starts with http:// or https://.",
+      "unknown": "Unexpected error. See the Home Assistant log."
+    },
+    "step": {
+      "reauth_confirm": {
+        "data": {
+          "api_key": "API key"
+        },
+        "data_description": {
+          "api_key": "A \"Play and browse\" key from nook web Settings > API access."
+        },
+        "description": "The nook server at {url} refused the API key. Enter a new one.",
+        "title": "New API key"
+      },
+      "user": {
+        "data": {
+          "api_key": "API key",
+          "url": "Server URL"
+        },
+        "data_description": {
+          "api_key": "A \"Play and browse\" key from nook web Settings > API access. Name it \"Home Assistant\": the TV shows that name as the sender.",
+          "url": "The address of the nook server, for example https://nook.example.com"
+        },
+        "description": "Connect Home Assistant to your nook server. Every paired nook TV becomes a media player.",
+        "title": "Connect to nook"
+      }
+    }
+  },
+  "exceptions": {
+    "auth_failed": {
+      "message": "The nook server refused the API key. Enter a new key in the integration."
+    },
+    "browse_failed": {
+      "message": "Could not load this list from nook: {error}"
+    },
+    "invalid_media_id": {
+      "message": "\"{media_id}\" is not a nook media id. A film or show id looks like nook://stremio/movie/tt1160419 or nook://jellyfin/series/0a1b2c3d4e5f6a7b."
+    },
+    "no_linked_remote": {
+      "message": "{name} has no linked Android TV Remote entity. Link one in the integration options to turn it on from Home Assistant."
+    },
+    "no_match": {
+      "message": "nook found nothing to play for \"{title}\"."
+    },
+    "not_playable": {
+      "message": "\"{media_id}\" is a folder of the media browser, not a film or show."
+    },
+    "play_failed": {
+      "message": "nook could not start playback: {error}"
+    },
+    "search_failed": {
+      "message": "nook search failed: {error}"
+    },
+    "tv_not_found": {
+      "message": "nook no longer knows the TV {name}."
+    },
+    "tv_offline": {
+      "message": "{name} is offline. Open nook on the TV, or link its Android TV Remote entity in the integration options."
+    },
+    "update_failed": {
+      "message": "Could not update from the nook server: {error}"
+    },
+    "wake_timeout": {
+      "message": "{name} was turned on but nook did not come online within {seconds} seconds."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "scan_interval": "Poll interval"
+        },
+        "data_description": {
+          "scan_interval": "How often Home Assistant asks the server what the TVs play, in seconds."
+        },
+        "description": "Below the poll interval is one field per nook TV: pick its Android TV Remote entity (from the Android TV Remote integration). A TV with a linked remote can be turned on from Home Assistant, and a title sent to it while it is off wakes it first.",
+        "title": "nook options"
+      }
+    }
+  },
+  "selector": {
+    "source": {
+      "options": {
+        "local": "Local (Jellyfin)",
+        "online": "Online (Stremio)"
+      }
+    },
+    "type": {
+      "options": {
+        "movie": "Film",
+        "series": "Show"
+      }
+    }
+  },
+  "services": {
+    "play_title": {
+      "description": "Searches nook for a title and plays the first hit on the TV. The TV picks the stream itself and resumes where you left off.",
+      "fields": {
+        "source": {
+          "description": "Only take a hit from this source.",
+          "name": "Source"
+        },
+        "title": {
+          "description": "What to search for.",
+          "name": "Title"
+        },
+        "type": {
+          "description": "Only take a film, or only a show.",
+          "name": "Type"
+        },
+        "year": {
+          "description": "Only take a hit from this year.",
+          "name": "Year"
+        }
+      },
+      "name": "Play title"
+    }
+  }
+}
