@@ -16,7 +16,7 @@
           "api_key": "API key"
         },
         "data_description": {
-          "api_key": "A \"Play and browse\" key from nook web Settings > API access."
+          "api_key": "A \"Play and browse\" key from the nook admin console: System > API access (/admin/system)."
         },
         "description": "The nook server at {url} refused the API key. Enter a new one.",
         "title": "New API key"
@@ -27,7 +27,7 @@
           "url": "Server URL"
         },
         "data_description": {
-          "api_key": "A \"Play and browse\" key from nook web Settings > API access. Name it \"Home Assistant\": the TV shows that name as the sender.",
+          "api_key": "A \"Play and browse\" key from the nook admin console: System > API access (/admin/system). Name it \"Home Assistant\": the TV shows that name as the sender.",
           "url": "The address of the nook server, for example https://nook.example.com"
         },
         "description": "Connect Home Assistant to your nook server. Every paired nook TV becomes a media player.",

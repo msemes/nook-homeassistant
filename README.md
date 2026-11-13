@@ -31,7 +31,7 @@ Copy the folder `custom_components/nook` to `/config/custom_components/nook` on 
 
 ### The API key
 
-In nook web, open **Settings > API access** and create a key with the **Play and browse** scope. Name it "Home Assistant": the TV shows that name as the sender of what it plays.
+In nook's admin console, open **System** (`https://<server>/admin/system`) and scroll to the **API access** card at the bottom. Create a key with the **Play and browse** scope. Name it "Home Assistant": the TV shows that name as the sender of what it plays.
 
 A full-access key works too, but it gives Home Assistant, and everyone who can read its configuration files, admin rights over the nook server. Do not use one.
 
