@@ -11,7 +11,7 @@ from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
 from homeassistant.const import CONF_API_KEY, CONF_URL
 from homeassistant.core import HomeAssistant
 
-from .conftest import API_KEY, BASE_URL, TV_LIVING, FakeNook, session
+from .conftest import API_KEY, BASE_URL, TV_LIVING, FakeNook, now_playing, session
 
 
 async def test_diagnostics_redacts_key(
@@ -22,6 +22,7 @@ async def test_diagnostics_redacts_key(
 ) -> None:
     """The API key is redacted; TVs and sessions are listed."""
     patch_client.sessions = [session()]
+    patch_client.now_playing = [now_playing(device_id=TV_LIVING)]
     await init_integration.runtime_data.async_refresh()
 
     diag = await get_diagnostics_for_config_entry(hass, hass_client, init_integration)
@@ -29,3 +30,4 @@ async def test_diagnostics_redacts_key(
     assert API_KEY not in str(diag)
     assert {tv["id"] for tv in diag["tvs"]} == {TV_LIVING, "tv-bedroom"}
     assert diag["sessions"][0]["content_id"] == "tt1160419"
+    assert diag["now_playing"][0]["kind"] == "music"

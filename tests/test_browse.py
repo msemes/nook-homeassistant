@@ -43,10 +43,19 @@ async def test_browse_root(
     init_integration: MockConfigEntry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """The root lists the five sections and can be searched."""
+    """The root lists the film and show sections, then Live TV, Radio and Music."""
     root = await _browse(hass, hass_ws_client)
     assert root["title"] == "nook"
     assert root["can_search"] is True
+    assert root["search_media_classes"] == [
+        "movie",
+        "tv_show",
+        "channel",
+        "music",
+        "artist",
+        "album",
+        "track",
+    ]
     assert root["children_media_class"] == "directory"
     assert _titles(root) == [
         "Continue Watching",
@@ -54,6 +63,9 @@ async def test_browse_root(
         "Favourites",
         "Movies",
         "Shows",
+        "Live TV",
+        "Radio",
+        "Music",
     ]
     assert _ids(root) == [
         "nook://browse/cw",
@@ -61,6 +73,9 @@ async def test_browse_root(
         "nook://browse/favorites",
         "nook://browse/movies",
         "nook://browse/shows",
+        "nook://browse/live",
+        "nook://browse/radio",
+        "nook://browse/music",
     ]
     assert all(
         child["can_expand"] and not child["can_play"] for child in root["children"]

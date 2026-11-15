@@ -28,4 +28,5 @@ async def async_get_config_entry_diagnostics(
         "last_update_success": coordinator.last_update_success,
         "tvs": [asdict(tv) for tv in data.tvs.values()],
         "sessions": [asdict(session) for session in data.sessions.values()],
+        "now_playing": [asdict(item) for item in data.now_playing.values()],
     }

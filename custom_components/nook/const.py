@@ -43,9 +43,27 @@ PLAYABLE_TYPES: Final = (TYPE_MOVIE, TYPE_SERIES)
 DEVICE_TYPE_TV: Final = "TV"
 DEVICE_STATUS_PAIRED: Final = "PAIRED"
 
-# Media ids: nook://<backend>/<type>/<sourceId> and nook://browse/<node>.
+# Media ids: nook://<backend>/<type>/<sourceId> and nook://browse/<node>;
+# Live TV, radio and music ids become nook://open links (media_id.py).
 MEDIA_ID_SCHEME: Final = "nook://"
 BROWSE_PREFIX: Final = "nook://browse/"
+LIVE_PREFIX: Final = "nook://live/"
+RADIO_PREFIX: Final = "nook://radio/"
+MUSIC_PREFIX: Final = "nook://music/"
+
+# The server refuses a nook://open value longer than this (NookOpenLink.kt).
+LINK_VALUE_MAX: Final = 100
+
+# What /me/now-playing reports a TV plays (MediaPlayingKinds).
+KIND_LIVE: Final = "live"
+KIND_RADIO: Final = "radio"
+KIND_MUSIC: Final = "music"
+NOW_PLAYING_KINDS: Final = (KIND_LIVE, KIND_RADIO, KIND_MUSIC)
+
+# Actions of POST /me/play-targets/{id}/control (PlayerControlActions).
+CONTROL_STOP: Final = "stop"
+CONTROL_PAUSE: Final = "pause"
+CONTROL_RESUME: Final = "resume"
 
 # What the linked Android TV Remote entity launches on turn_on.
 NOOK_OPEN_LINK: Final = "nook://open"
@@ -54,7 +72,17 @@ NOOK_OPEN_LINK: Final = "nook://open"
 WAKE_TIMEOUT: Final = 20.0
 WAKE_POLL_INTERVAL: Final = 2.0
 
+# Seconds after a play or a control before the state is polled again.
+FOLLOW_UP_DELAY: Final = 2.0
+
 CATALOG_PAGE_LIMIT: Final = 100
+
+# How long the channel list is reused before it is fetched again, in seconds.
+CHANNEL_CACHE_SECONDS: Final = 60.0
+# How many http:// image addresses the browse image proxy remembers.
+IMAGE_PROXY_SIZE: Final = 2000
+# A reported position within this many seconds of the running one is no jump.
+POSITION_TOLERANCE: Final = 2.0
 
 SERVICE_PLAY_TITLE: Final = "play_title"
 ATTR_TITLE: Final = "title"

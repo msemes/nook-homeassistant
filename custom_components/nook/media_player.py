@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 # Home Assistant 2026.10 and later validate with probatio, earlier releases
 # with voluptuous; the two share this API.
@@ -24,6 +25,7 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_ON
 from homeassistant.core import (
+    CALLBACK_TYPE,
     HomeAssistant,
     ServiceResponse,
     SupportsResponse,
@@ -33,6 +35,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.typing import VolDictType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
@@ -41,27 +44,30 @@ from .api import (
     NookAuthError,
     NookError,
     NookNotFoundError,
+    NookNowPlaying,
     NookOfflineError,
+    NookResponseError,
+    NookScopeError,
     NookSession,
 )
-from .browse import (
-    PlayTarget,
-    async_browse,
-    async_search,
-    display_title,
-    item_target,
-    parse_play_id,
-    pick_title,
-)
+from .browse import async_browse, async_search, display_title, item_target, pick_title
 from .const import (
     ATTR_SOURCE,
     ATTR_TITLE,
     ATTR_TYPE,
     ATTR_YEAR,
     BACKEND_STREMIO,
+    CONTROL_PAUSE,
+    CONTROL_RESUME,
+    CONTROL_STOP,
     DOMAIN,
+    FOLLOW_UP_DELAY,
+    KIND_LIVE,
+    KIND_RADIO,
+    LOGGER,
     NOOK_OPEN_LINK,
     PLAYABLE_TYPES,
+    POSITION_TOLERANCE,
     SERVICE_PLAY_TITLE,
     SOURCE_TO_BACKEND,
     TYPE_EPISODE,
@@ -71,6 +77,17 @@ from .const import (
     WAKE_TIMEOUT,
 )
 from .coordinator import NookConfigEntry, NookCoordinator, SessionArt, artwork_key
+from .media_id import (
+    ChannelTarget,
+    LinkTarget,
+    OpenTarget,
+    PlayTarget,
+    StationTarget,
+    parse_media_id,
+)
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 # Entities only read the coordinator; actions may run side by side.
 PARALLEL_UPDATES = 0
@@ -82,7 +99,15 @@ BASE_FEATURES = (
     MediaPlayerEntityFeature.PLAY_MEDIA
     | MediaPlayerEntityFeature.BROWSE_MEDIA
     | MediaPlayerEntityFeature.SEARCH_MEDIA
+    | MediaPlayerEntityFeature.STOP
+    | MediaPlayerEntityFeature.PAUSE
+    | MediaPlayerEntityFeature.PLAY
 )
+
+# The media_content_type of a browse image served through Home Assistant.
+BROWSE_IMAGE_TYPE = "image"
+
+type PositionKey = tuple[str, str, int | None, bool]
 
 PLAY_TITLE_SCHEMA: VolDictType = {
     vol.Required(ATTR_TITLE): vol.All(cv.string, vol.Length(min=1)),
@@ -121,6 +146,11 @@ async def async_setup_entry(
     )
 
 
+def _is_plain_http(url: str | None) -> TypeGuard[str]:
+    """Return True for an http:// address, which an https frontend will not load."""
+    return url is not None and url[:7].lower() == "http://"
+
+
 def _episode_numbers(session: NookSession) -> tuple[str, str] | None:
     """Return (season, episode) from a Stremio episode id "tt...:S:E"."""
     if session.backend != BACKEND_STREMIO or session.type != TYPE_EPISODE:
@@ -153,6 +183,8 @@ class NookMediaPlayer(CoordinatorEntity[NookCoordinator], MediaPlayerEntity):
         )
         self._art_key: str | None = None
         self._art: SessionArt | None = None
+        self._position_key: PositionKey | None = None
+        self._cancel_follow_up: CALLBACK_TYPE | None = None
         self._update_attrs()
 
     @property
@@ -181,7 +213,30 @@ class NookMediaPlayer(CoordinatorEntity[NookCoordinator], MediaPlayerEntity):
     async def async_added_to_hass(self) -> None:
         """Start the artwork lookup for what plays at start-up."""
         await super().async_added_to_hass()
+        self.async_on_remove(self._async_cancel_follow_up)
         self._update_attrs()
+
+    @callback
+    def _async_follow_up(self) -> None:
+        """Poll again shortly after a play or a control, once the TV has reported.
+
+        An immediate refresh would mostly see the old state, and would start
+        the coordinator's 10 s cooldown for requested refreshes.
+        """
+        self._async_cancel_follow_up()
+        self._cancel_follow_up = async_call_later(
+            self.hass, FOLLOW_UP_DELAY, self._async_follow_up_refresh
+        )
+
+    async def _async_follow_up_refresh(self, _now: datetime) -> None:
+        self._cancel_follow_up = None
+        await self.coordinator.async_request_refresh()
+
+    @callback
+    def _async_cancel_follow_up(self) -> None:
+        if self._cancel_follow_up is not None:
+            self._cancel_follow_up()
+            self._cancel_follow_up = None
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -200,25 +255,40 @@ class NookMediaPlayer(CoordinatorEntity[NookCoordinator], MediaPlayerEntity):
         self._attr_media_position = None
         self._attr_media_position_updated_at = None
         self._attr_media_image_url = None
+        self._attr_media_artist = None
+        self._attr_media_album_name = None
+        self._attr_media_channel = None
+        self._position_key = None
 
     @callback
     def _update_attrs(self) -> None:
         data = self.coordinator.data
         tv = data.tvs.get(self.device_id)
         session = data.sessions.get(self.device_id)
+        now_playing = data.now_playing.get(self.device_id)
         if tv is None:
             self._attr_state = None
             self._clear_media()
-            return
-        if not tv.online:
+        elif not tv.online:
             self._attr_state = MediaPlayerState.OFF
             self._clear_media()
-            return
-        if session is None:
+        elif session is not None:
+            # A film or episode wins over what the TV last said of other media.
+            self._update_session(session)
+        elif now_playing is not None:
+            self._update_now_playing(now_playing)
+        else:
             self._attr_state = MediaPlayerState.IDLE
             self._clear_media()
-            return
+        # Home Assistant fetches an http:// image itself: on an https frontend
+        # the browser would refuse to load it.
+        self._attr_media_image_remotely_accessible = not _is_plain_http(
+            self._attr_media_image_url
+        )
 
+    @callback
+    def _update_session(self, session: NookSession) -> None:
+        self._clear_media()
         self._attr_state = (
             MediaPlayerState.PAUSED
             if session.state == "paused"
@@ -258,6 +328,102 @@ class NookMediaPlayer(CoordinatorEntity[NookCoordinator], MediaPlayerEntity):
             if session.updated_at
             else None
         )
+
+    @callback
+    def _update_now_playing(self, item: NookNowPlaying) -> None:
+        """Show Live TV, a radio station or music, as /me/now-playing reports it."""
+        previous = (
+            self._position_key,
+            self._attr_media_position,
+            self._attr_media_position_updated_at,
+        )
+        self._clear_media()
+        self._attr_state = (
+            MediaPlayerState.PAUSED if item.paused else MediaPlayerState.PLAYING
+        )
+        self._attr_media_image_url = item.image_url
+        if item.kind == KIND_LIVE:
+            channel = self.coordinator.cached_channel(item.content_id, item.title)
+            channel_id = item.content_id or (channel.id if channel else None)
+            self._attr_media_content_type = MediaType.CHANNEL
+            self._attr_media_channel = item.title or (channel.name if channel else None)
+            # Home Assistant's media card shows a channel's title and then the
+            # app name, never media_channel, so the channel leads the title.
+            self._attr_media_title = (
+                " · ".join(p for p in (self._attr_media_channel, item.subtitle) if p)
+                or None
+            )
+            self._attr_media_content_id = (
+                ChannelTarget(channel_id).media_content_id if channel_id else None
+            )
+            if item.image_url is None and channel is not None:
+                self._attr_media_image_url = channel.logo_url
+        elif item.kind == KIND_RADIO:
+            self._attr_media_content_type = MediaType.MUSIC
+            self._attr_media_channel = item.title
+            self._attr_media_title = item.subtitle or item.title
+            # The card's second line for music is the artist: the station,
+            # under the track it plays. Left out when the title is the station.
+            self._attr_media_artist = item.title if item.subtitle else None
+            self._attr_media_content_id = (
+                StationTarget(item.content_id, item.title).media_content_id
+                if item.content_id
+                else None
+            )
+        else:
+            # A song: the report does not say which list it plays from, so
+            # there is no media id to play it again with.
+            self._attr_media_content_type = MediaType.MUSIC
+            self._attr_media_title = item.title
+            self._attr_media_artist = item.artist
+            self._attr_media_album_name = item.album
+        self._set_position(item, *previous)
+
+    @callback
+    def _set_position(
+        self,
+        item: NookNowPlaying,
+        previous_key: PositionKey | None,
+        previous_position: int | None,
+        previous_at: datetime | None,
+    ) -> None:
+        """Set position and duration; the timestamp moves only when the position jumps.
+
+        Home Assistant runs the progress bar itself from the last position and
+        its timestamp, so a report that agrees with the running bar changes
+        nothing (and writes no state).
+        """
+        self._attr_media_duration = (
+            item.duration_ms // 1000 if item.duration_ms else None
+        )
+        if item.position_ms is None:
+            return
+        key: PositionKey = (
+            item.kind,
+            item.content_id or item.title or "",
+            item.duration_ms,
+            item.paused,
+        )
+        updated_at = (
+            dt_util.utc_from_timestamp(item.updated_at / 1000)
+            if item.updated_at
+            else dt_util.utcnow()
+        )
+        position = item.position_ms / 1000
+        if (
+            key == previous_key
+            and previous_position is not None
+            and previous_at is not None
+        ):
+            elapsed = 0.0 if item.paused else (updated_at - previous_at).total_seconds()
+            if abs(previous_position + elapsed - position) <= POSITION_TOLERANCE:
+                self._position_key = key
+                self._attr_media_position = previous_position
+                self._attr_media_position_updated_at = previous_at
+                return
+        self._position_key = key
+        self._attr_media_position = int(position)
+        self._attr_media_position_updated_at = updated_at
 
     @callback
     def _art_for(self, session: NookSession) -> SessionArt | None:
@@ -348,6 +514,33 @@ class NookMediaPlayer(CoordinatorEntity[NookCoordinator], MediaPlayerEntity):
             },
         )
 
+    def _send_error(self, err: NookError, failed_key: str) -> HomeAssistantError:
+        """Map a push to the TV that failed onto the error the user sees."""
+        if isinstance(err, NookOfflineError):
+            return self._offline_error()
+        if isinstance(err, NookNotFoundError):
+            return HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="tv_not_found",
+                translation_placeholders={"name": self._tv_name},
+            )
+        if isinstance(err, NookScopeError):
+            # The key works; the server predates Live TV, radio, music and
+            # Stop / Pause from Home Assistant.
+            return HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="server_unsupported"
+            )
+        if isinstance(err, NookAuthError):
+            self.coordinator.config_entry.async_start_reauth(self.hass)
+            return HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="auth_failed"
+            )
+        return HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key=failed_key,
+            translation_placeholders={"error": str(err)},
+        )
+
     async def _async_play(self, target: PlayTarget) -> None:
         await self._async_ensure_online()
         try:
@@ -358,32 +551,92 @@ class NookMediaPlayer(CoordinatorEntity[NookCoordinator], MediaPlayerEntity):
                 target.type,
                 resume=True,
             )
-        except NookOfflineError as err:
-            raise self._offline_error() from err
-        except NookNotFoundError as err:
+        except NookError as err:
+            raise self._send_error(err, "play_failed") from err
+        self._async_follow_up()
+
+    async def _async_link(self, target: OpenTarget) -> str:
+        """Return the nook://open link a media id becomes."""
+        if isinstance(target, LinkTarget):
+            return target.link
+        if isinstance(target, ChannelTarget):
+            # The name is the TV's fallback when its channel ids differ.
+            channel = self.coordinator.cached_channel(target.channel_id)
+            if channel is None:
+                try:
+                    await self.coordinator.async_get_channels()
+                except NookError as err:
+                    LOGGER.debug("No channel list for the name of a channel: %s", err)
+                channel = self.coordinator.cached_channel(target.channel_id)
+            return target.link(channel.name if channel else None)
+        return target.link()
+
+    async def _async_open(self, target: OpenTarget) -> None:
+        await self._async_ensure_online()
+        link = await self._async_link(target)
+        try:
+            await self.coordinator.client.async_open_link(self.device_id, link)
+        except NookResponseError as err:
+            if err.status != 400:
+                raise self._send_error(err, "play_failed") from err
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
-                translation_key="tv_not_found",
-                translation_placeholders={"name": self._tv_name},
-            ) from err
-        except NookAuthError as err:
-            self.coordinator.config_entry.async_start_reauth(self.hass)
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="auth_failed"
+                translation_key="link_refused",
+                translation_placeholders={"link": link, "error": err.reason},
             ) from err
         except NookError as err:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="play_failed",
-                translation_placeholders={"error": str(err)},
-            ) from err
-        await self.coordinator.async_request_refresh()
+            raise self._send_error(err, "play_failed") from err
+        self._async_follow_up()
+
+    async def _async_control(self, action: str) -> None:
+        try:
+            await self.coordinator.client.async_control(self.device_id, action)
+        except NookError as err:
+            raise self._send_error(err, "control_failed") from err
+        self._async_follow_up()
+
+    async def async_media_stop(self) -> None:
+        """Stop whatever the TV plays."""
+        await self._async_control(CONTROL_STOP)
+
+    async def async_media_pause(self) -> None:
+        """Pause a film, an episode, a station or music. Live TV ignores it."""
+        await self._async_control(CONTROL_PAUSE)
+
+    async def async_media_play(self) -> None:
+        """Resume what was paused."""
+        await self._async_control(CONTROL_RESUME)
 
     async def async_play_media(
         self, media_type: MediaType | str, media_id: str, **kwargs: Any
     ) -> None:
-        """Play a nook://<backend>/<movie|series>/<sourceId> id on the TV."""
-        await self._async_play(parse_play_id(media_id))
+        """Play a nook media id on the TV: a title, a channel, a station or music."""
+        target = parse_media_id(media_id)
+        if isinstance(target, PlayTarget):
+            await self._async_play(target)
+        else:
+            await self._async_open(target)
+
+    @callback
+    def _proxy_plain_http(self, nodes: Iterable[BrowseMedia]) -> None:
+        """Serve http:// artwork through Home Assistant, as the entity picture is."""
+        for node in nodes:
+            if _is_plain_http(node.thumbnail):
+                key = self.coordinator.register_image(node.thumbnail)
+                node.thumbnail = self.get_browse_image_url(BROWSE_IMAGE_TYPE, key)
+            if node.children:
+                self._proxy_plain_http(node.children)
+
+    async def async_get_browse_image(
+        self,
+        media_content_type: str,
+        media_content_id: str,
+        media_image_id: str | None = None,
+    ) -> tuple[bytes | None, str | None]:
+        """Fetch an http:// thumbnail the browse tree handed out."""
+        if (url := self.coordinator.image_url(media_content_id)) is None:
+            return None, None
+        return await self._async_fetch_image(url)
 
     async def async_browse_media(
         self,
@@ -391,11 +644,15 @@ class NookMediaPlayer(CoordinatorEntity[NookCoordinator], MediaPlayerEntity):
         media_content_id: str | None = None,
     ) -> BrowseMedia:
         """Return the browse tree."""
-        return await async_browse(self.coordinator.client, media_content_id)
+        node = await async_browse(self.coordinator, media_content_id)
+        self._proxy_plain_http([node])
+        return node
 
     async def async_search_media(self, query: SearchMediaQuery) -> SearchMedia:
-        """Search the library."""
-        return await async_search(self.coordinator.client, query)
+        """Search the library, the channels, radio and music."""
+        found = await async_search(self.coordinator, query)
+        self._proxy_plain_http(found.result)
+        return found
 
     async def async_play_title(
         self,

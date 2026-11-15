@@ -48,6 +48,9 @@ BASE_FEATURES = (
     MediaPlayerEntityFeature.PLAY_MEDIA
     | MediaPlayerEntityFeature.BROWSE_MEDIA
     | MediaPlayerEntityFeature.SEARCH_MEDIA
+    | MediaPlayerEntityFeature.STOP
+    | MediaPlayerEntityFeature.PAUSE
+    | MediaPlayerEntityFeature.PLAY
 )
 
 
@@ -256,6 +259,9 @@ async def test_play_media(
         ("nook://plex/movie/1", "invalid_media_id"),
         ("nook://stremio/movie/", "invalid_media_id"),
         ("media-source://whatever", "invalid_media_id"),
+        ("nook://live/", "invalid_media_id"),
+        ("nook://music/album", "invalid_media_id"),
+        ("nook://music/track/jellyfin:t9", "track_not_playable"),
     ],
 )
 async def test_play_media_rejects_ids(
@@ -265,11 +271,12 @@ async def test_play_media_rejects_ids(
     media_id: str,
     key: str,
 ) -> None:
-    """Anything but nook://<backend>/<movie|series>/<id> is refused."""
+    """A folder, a malformed id or a song without a list is refused."""
     with pytest.raises(HomeAssistantError) as err:
         await _play(hass, ENTITY_LIVING, media_id)
     assert err.value.translation_key == key
     assert patch_client.play_calls == []
+    assert patch_client.open_calls == []
 
 
 async def test_play_media_offline_without_remote(

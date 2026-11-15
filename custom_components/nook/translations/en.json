@@ -42,8 +42,14 @@
     "browse_failed": {
       "message": "Could not load this list from nook: {error}"
     },
+    "control_failed": {
+      "message": "nook could not control the TV: {error}"
+    },
     "invalid_media_id": {
-      "message": "\"{media_id}\" is not a nook media id. A film or show id looks like nook://stremio/movie/tt1160419 or nook://jellyfin/series/0a1b2c3d4e5f6a7b."
+      "message": "\"{media_id}\" is not a nook media id. A film or show looks like nook://stremio/movie/tt1160419, a channel like nook://live/<channel id>, music like nook://music/playlist/<id>; a TV link starts with nook://open. The integration's README lists every form."
+    },
+    "link_refused": {
+      "message": "The nook server refused the link {link}: {error}"
     },
     "no_linked_remote": {
       "message": "{name} has no linked Android TV Remote entity. Link one in the integration options to turn it on from Home Assistant."
@@ -52,13 +58,19 @@
       "message": "nook found nothing to play for \"{title}\"."
     },
     "not_playable": {
-      "message": "\"{media_id}\" is a folder of the media browser, not a film or show."
+      "message": "\"{media_id}\" is a folder of the media browser, not something to play."
     },
     "play_failed": {
       "message": "nook could not start playback: {error}"
     },
     "search_failed": {
       "message": "nook search failed: {error}"
+    },
+    "server_unsupported": {
+      "message": "This nook server is too old for Live TV, radio, music and Stop / Pause from Home Assistant. Update the nook server."
+    },
+    "track_not_playable": {
+      "message": "\"{media_id}\" is a song without an album. Play it from a playlist, an artist or Liked songs."
     },
     "tv_not_found": {
       "message": "nook no longer knows the TV {name}."

@@ -16,6 +16,7 @@ from custom_components.nook.api import (
     NookNotFoundError,
     NookOfflineError,
     NookResponseError,
+    NookScopeError,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -215,3 +216,209 @@ async def test_non_json_body(
     aioclient_mock.get(DEVICES_URL, text="<html>login</html>")
     with pytest.raises(NookResponseError):
         await _client(hass).async_get_devices()
+
+
+async def test_open_and_control_send_exact_bodies(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A link and a control post their one field to the TV's path."""
+    aioclient_mock.post(
+        f"{BASE_URL}/api/me/play-targets/tv-1/open", json={"id": "tv-1", "name": "TV"}
+    )
+    aioclient_mock.post(
+        f"{BASE_URL}/api/me/play-targets/tv-1/control",
+        json={"id": "tv-1", "name": "TV"},
+    )
+    client = _client(hass)
+    assert await client.async_open_link("tv-1", "nook://open?channel=5") == {
+        "id": "tv-1",
+        "name": "TV",
+    }
+    await client.async_control("tv-1", "pause")
+    assert [call[2] for call in aioclient_mock.mock_calls] == [
+        {"link": "nook://open?channel=5"},
+        {"action": "pause"},
+    ]
+
+
+async def test_open_refused_and_older_server(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """400 keeps the server's reason; 403 API_KEY_SCOPE is a scope error."""
+    url = f"{BASE_URL}/api/me/play-targets/tv-1/open"
+    aioclient_mock.post(url, status=400, json={"error": "unknown parameter colour"})
+    with pytest.raises(NookResponseError) as err:
+        await _client(hass).async_open_link("tv-1", "nook://open?colour=red")
+    assert err.value.status == 400
+    assert err.value.reason == "unknown parameter colour"
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(
+        url, status=403, json={"error": "not for this key", "code": "API_KEY_SCOPE"}
+    )
+    with pytest.raises(NookScopeError) as scope:
+        await _client(hass).async_open_link("tv-1", "nook://open")
+    assert isinstance(scope.value, NookAuthError)
+
+
+async def test_now_playing_and_channels_parse(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Missing fields take their defaults; rows without their keys are skipped."""
+    aioclient_mock.get(
+        f"{BASE_URL}/api/me/now-playing",
+        json={
+            "items": [
+                {
+                    "deviceId": "tv-1",
+                    "kind": "live",
+                    "title": "HRT 1",
+                    "subtitle": "Dnevnik",
+                    "contentId": "HRT1.hr",
+                    "positionMs": 600000,
+                    "durationMs": 1800000,
+                    "updatedAt": 5,
+                },
+                {"deviceId": "tv-2", "kind": "radio", "updatedAt": 6, "paused": True},
+                {"kind": "music"},
+            ]
+        },
+    )
+    aioclient_mock.get(
+        f"{BASE_URL}/api/me/channels/brief",
+        json={
+            "channels": [
+                {
+                    "id": "HRT1.hr",
+                    "name": "HRT 1",
+                    "number": 1,
+                    "logoUrl": "http://l/hrt1.png",
+                    "group": "Croatia",
+                    "favorite": True,
+                    "nowTitle": "Dnevnik",
+                },
+                {"id": "x", "name": "X"},
+            ]
+        },
+    )
+    client = _client(hass)
+    live, radio = await client.async_get_now_playing()
+    assert (live.kind, live.title, live.subtitle, live.content_id) == (
+        "live",
+        "HRT 1",
+        "Dnevnik",
+        "HRT1.hr",
+    )
+    assert (live.position_ms, live.duration_ms, live.paused) == (600000, 1800000, False)
+    assert radio.paused is True
+    assert radio.position_ms is None
+
+    first, second = await client.async_get_channels()
+    assert (first.number, first.group, first.favorite, first.now_title) == (
+        1,
+        "Croatia",
+        True,
+        "Dnevnik",
+    )
+    assert (second.number, second.group, second.favorite) == (None, None, False)
+
+
+async def test_radio_parses_favourites_and_search(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Favourites are under items, search hits under stations; an empty logo is none."""
+    aioclient_mock.get(
+        f"{BASE_URL}/api/me/radio/favorites",
+        json={
+            "items": [{"stationUuid": "s18415", "name": "Otvoreni", "faviconUrl": ""}]
+        },
+    )
+    aioclient_mock.get(
+        f"{BASE_URL}/api/me/radio/search",
+        json={
+            "stations": [
+                {
+                    "stationUuid": "s24939",
+                    "name": "BBC Radio 1",
+                    "streamUrl": "",
+                    "faviconUrl": "http://l/bbc.png",
+                }
+            ]
+        },
+    )
+    client = _client(hass)
+    (favorite,) = await client.async_get_radio_favorites()
+    assert (favorite.id, favorite.name, favorite.logo_url) == (
+        "s18415",
+        "Otvoreni",
+        None,
+    )
+    (hit,) = await client.async_search_radio("bbc")
+    assert hit.logo_url == "http://l/bbc.png"
+    assert aioclient_mock.mock_calls[1][1].query["q"] == "bbc"
+
+
+async def test_music_parses(
+    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Home, pages and an album: nook ids, counts, the playlist's first image."""
+    aioclient_mock.get(
+        f"{BASE_URL}/api/me/music/home",
+        json={
+            "recentlyPlayed": [
+                {
+                    "id": "jellyfin:t1",
+                    "sourceId": "t1",
+                    "title": "Come Together",
+                    "artist": "The Beatles",
+                    "albumId": "jellyfin:al1",
+                }
+            ],
+            "playlists": [
+                {
+                    "id": "p1",
+                    "name": "Running",
+                    "trackCount": 2,
+                    "imageUrls": ["a", "b"],
+                }
+            ],
+            "likedTrackCount": 4,
+            "trackCount": 17,
+        },
+    )
+    aioclient_mock.get(
+        f"{BASE_URL}/api/me/music/albums",
+        json={
+            "items": [{"id": "jellyfin:al1", "sourceId": "al1", "title": "Abbey Road"}],
+            "total": 250,
+        },
+    )
+    aioclient_mock.get(
+        URL(f"{BASE_URL}/api/me/music/albums/jellyfin%3Aal1", encoded=True),
+        json={
+            "album": {"id": "jellyfin:al1", "sourceId": "al1", "title": "Abbey Road"},
+            "tracks": [
+                {"id": "jellyfin:t1", "sourceId": "t1", "title": "Come Together"}
+            ],
+        },
+    )
+    client = _client(hass)
+    home = await client.async_get_music_home()
+    assert home.track_count == 17
+    assert home.liked_track_count == 4
+    assert home.recently_played[0].album_id == "jellyfin:al1"
+    assert home.playlists[0].image_url == "a"
+    assert home.recently_added == []
+
+    page = await client.async_get_albums(offset=100, limit=100)
+    assert page.total == 250
+    assert page.items[0].track_count == 0
+    assert aioclient_mock.mock_calls[1][1].query == {
+        "offset": "100",
+        "limit": "100",
+        "sort": "title",
+    }
+
+    found = await client.async_get_album("jellyfin:al1")
+    assert found.name == "Abbey Road"
+    assert [t.id for t in found.tracks] == ["jellyfin:t1"]
