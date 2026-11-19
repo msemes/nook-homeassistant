@@ -102,7 +102,7 @@
   "selector": {
     "source": {
       "options": {
-        "local": "Local (Jellyfin)",
+        "local": "Local (Nook Media Server)",
         "online": "Online (Stremio)"
       }
     },

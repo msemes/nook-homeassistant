@@ -17,7 +17,8 @@ MAX_SCAN_INTERVAL: Final = 120
 
 REQUEST_TIMEOUT: Final = 15
 
-# Backends as the nook server names them. LOCAL = Jellyfin, ONLINE = Stremio.
+# Backends as the nook server names them. LOCAL = Nook Media Server (its key is
+# still "jellyfin"), ONLINE = Stremio.
 BACKEND_JELLYFIN: Final = "jellyfin"
 BACKEND_STREMIO: Final = "stremio"
 BACKENDS: Final = (BACKEND_JELLYFIN, BACKEND_STREMIO)
